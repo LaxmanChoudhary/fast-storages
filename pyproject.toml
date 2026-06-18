@@ -1,0 +1,61 @@
+[project]
+name = "fast-storages"
+version = "0.1.2"
+description = "A simple, extensible package to manage file storage backends in FastAPI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "laxmanchoudhary", email = "im.choudharylaxman@gmail.com" }]
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "aiofiles>=23.0",
+]
+classifiers = [
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Utilities",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/LaxmanChoudhary/fast-storages"
+Repository = "https://github.com/LaxmanChoudhary/fast-storages"
+Changelog = "https://github.com/LaxmanChoudhary/fast-storages/releases"
+
+[project.optional-dependencies]
+s3 = ["aioboto3>=12.0"]
+azure = ["azure-storage-blob>=12.19"]
+gcs = ["gcloud-aio-storage>=9.0"]
+postgresql = ["psycopg>=3.1", "psycopg-pool>=3.1"]
+postgresql-asyncpg = ["asyncpg>=0.29"]
+all = [
+    "fast-storages[s3,azure,gcs,postgresql]",
+]
+
+# to add -> uv add <package> --optional dev
+# to sync -> uv sync --extra dev
+dev = [
+    "fastapi>=0.110",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "uvicorn>=0.49.0",
+    "python-multipart>=0.0.32",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fast_storages"]
