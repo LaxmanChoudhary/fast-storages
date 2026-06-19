@@ -1,0 +1,115 @@
+name: Bump Version & Tag
+
+# Runs when a PR is merged into main. Parses the PR title (Conventional
+# Commits format, enforced by pr-title-check.yml) to decide whether this
+# is a major, minor, or patch bump, updates pyproject.toml via `uv version`,
+# commits that change, and pushes a new vX.Y.Z tag.
+#
+# Pushing the tag does NOT create a GitHub Release — that's handled by
+# scheduled-release.yml, so releases go out on a predictable cadence
+# rather than on every merge.
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Determine bump type from PR title
+        id: bump_type
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "PR title: $PR_TITLE"
+
+          # Conventional Commit format: type(scope)!: subject
+          # Extract the leading type token, e.g. "feat", "fix", "feat!"
+          TYPE=$(echo "$PR_TITLE" | grep -oP '^[a-zA-Z]+(\([^)]*\))?!?(?=:)' || true)
+
+          if [ -z "$TYPE" ]; then
+            echo "Could not parse a Conventional Commit type from the PR title. Skipping bump."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Major bump: "!" right before the colon, or a BREAKING CHANGE footer in the PR body
+          if echo "$TYPE" | grep -q '!$'; then
+            BUMP="major"
+          elif echo "${{ github.event.pull_request.body }}" | grep -qE 'BREAKING[ -]CHANGE'; then
+            BUMP="major"
+          else
+            # Strip scope, e.g. "feat(parser)" -> "feat"
+            BASE_TYPE=$(echo "$TYPE" | sed -E 's/\(.*\)//')
+            case "$BASE_TYPE" in
+              feat)
+                BUMP="minor"
+                ;;
+              fix|perf|docs|style|refactor|test|build|ci|chore|revert)
+                BUMP="patch"
+                ;;
+              *)
+                echo "Unrecognized type '$BASE_TYPE'. Skipping bump."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+            esac
+          fi
+
+          echo "Resolved bump type: $BUMP"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version in pyproject.toml
+        if: steps.bump_type.outputs.skip == 'false'
+        id: new_version
+        run: |
+          uv version --bump ${{ steps.bump_type.outputs.bump }}
+          NEW_VERSION=$(uv version --short)
+          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Re-lock if uv.lock exists
+        if: steps.bump_type.outputs.skip == 'false'
+        run: |
+          if [ -f uv.lock ]; then
+            uv lock
+          fi
+
+      - name: Commit pyproject.toml
+        if: steps.bump_type.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          if [ -f uv.lock ]; then
+            git add uv.lock
+          fi
+          git commit -m "chore(release): bump version to ${{ steps.new_version.outputs.version }} [skip ci]"
+          git push origin main
+
+      - name: Create and push tag
+        if: steps.bump_type.outputs.skip == 'false'
+        run: |
+          TAG="v${{ steps.new_version.outputs.version }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed tag $TAG"
