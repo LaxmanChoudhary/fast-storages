@@ -18,13 +18,31 @@ from .base import DEFAULT_CHUNK_SIZE
 
 @dataclass(frozen=True)
 class FileMeta:
-    """Lightweight metadata describing a stored or to-be-stored file."""
+    """Metadata describing a stored file, returned by ``Storage.save()``.
+
+    Attributes
+    ----------
+    name:
+        The original filename as supplied by the caller (e.g. ``"photo.png"``).
+    key:
+        The resolved storage-relative path/key the content was saved under.
+        When ``upload_to`` is used, this will differ from *name*
+        (e.g. ``"avatars/photo.png"``).  This is the value to pass to
+        ``open()``, ``url()``, ``delete()``, etc.
+    size:
+        Total bytes written.
+    content_type:
+        MIME type of the file, if known.
+    backend:
+        Short identifier of the backend that stored the file
+        (e.g. ``"local"``, ``"s3"``, ``"azure"``, ``"postgresql"``).
+    """
 
     name: str
-    size: int | None = None
+    key: str
+    size: int
     content_type: str | None = None
-    etag: str | None = None
-    last_modified: str | None = None  # ISO 8601; kept as str to avoid forcing a tz lib choice on callers
+    backend: str | None = None
 
 
 class UploadFileReader:

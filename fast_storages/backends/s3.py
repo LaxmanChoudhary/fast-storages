@@ -51,6 +51,7 @@ from typing import Any, AsyncIterator, ClassVar
 
 from ..base import DEFAULT_CHUNK_SIZE, SaveContent, Storage, UploadTo
 from ..config import BaseStorageSettings
+from ..files import FileMeta
 from pydantic_settings import SettingsConfigDict
 
 
@@ -122,7 +123,7 @@ class S3Storage(Storage):
         content_type: str | None = None,
         upload_to: UploadTo = None,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> FileMeta:
         raise NotImplementedError(
             "S3Storage.save: resolve_upload_name(name, upload_to, context) first, then "
             "use put_object for bytes, multipart upload for large AsyncIterable[bytes] "

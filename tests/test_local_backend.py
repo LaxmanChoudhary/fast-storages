@@ -19,7 +19,11 @@ def storage(tmp_path):
 
 @pytest.mark.asyncio
 async def test_save_and_open_bytes(storage):
-    await storage.save("a.txt", b"hello")
+    result = await storage.save("a.txt", b"hello")
+    assert result.key == "a.txt"
+    assert result.name == "a.txt"
+    assert result.size == 5
+    assert result.backend == "local"
     chunks = [chunk async for chunk in await storage.open("a.txt")]
     assert b"".join(chunks) == b"hello"
 
@@ -27,7 +31,8 @@ async def test_save_and_open_bytes(storage):
 @pytest.mark.asyncio
 async def test_save_overwrites_existing(storage):
     await storage.save("a.txt", b"first")
-    await storage.save("a.txt", b"second")
+    result = await storage.save("a.txt", b"second")
+    assert result.size == 6
     chunks = [chunk async for chunk in await storage.open("a.txt")]
     assert b"".join(chunks) == b"second"
 
@@ -38,9 +43,29 @@ async def test_save_from_async_iterable(storage):
         yield b"chunk-1-"
         yield b"chunk-2"
 
-    await storage.save("streamed.txt", gen())
+    result = await storage.save("streamed.txt", gen())
+    assert result.key == "streamed.txt"
+    assert result.size == 15
     chunks = [chunk async for chunk in await storage.open("streamed.txt")]
     assert b"".join(chunks) == b"chunk-1-chunk-2"
+
+
+@pytest.mark.asyncio
+async def test_save_returns_filemeta_with_content_type(storage):
+    result = await storage.save("photo.png", b"\x89PNG", content_type="image/png")
+    assert result.name == "photo.png"
+    assert result.key == "photo.png"
+    assert result.size == 4
+    assert result.content_type == "image/png"
+    assert result.backend == "local"
+
+
+@pytest.mark.asyncio
+async def test_save_with_upload_to_reflects_in_key(storage):
+    result = await storage.save("photo.png", b"img", upload_to="avatars")
+    assert result.name == "photo.png"
+    assert result.key == "avatars/photo.png"
+    assert result.size == 3
 
 
 @pytest.mark.asyncio

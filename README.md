@@ -91,15 +91,17 @@ from fast_storages import Storage, UploadFileReader, get_storage, guess_content_
 @app.post("/upload")
 async def upload(file: UploadFile, storage: Storage = Depends(get_storage())):
     reader = UploadFileReader(file)
-    name = await storage.save(
+    result = await storage.save(
         file.filename or "unnamed",
         reader,
         content_type=file.content_type or guess_content_type(file.filename or ""),
     )
     return {
-        "name": name,
-        "size": await storage.size(name),
-        "url": await storage.url(name),
+        "name": result.name,
+        "key": result.key,
+        "size": result.size,
+        "content_type": result.content_type,
+        "url": await storage.url(result.key),
     }
 
 @app.get("/download/{name:path}")
@@ -160,8 +162,8 @@ async def upload_avatar(
     storage: Storage = Depends(get_storage("avatars")),
 ):
     reader = UploadFileReader(file)
-    name = await storage.save(file.filename, reader)
-    return {"url": await storage.url(name)}
+    result = await storage.save(file.filename, reader)
+    return {"url": await storage.url(result.key)}
 ```
 
 ---
@@ -303,7 +305,7 @@ Every backend implements the same `Storage` interface:
 
 ```python
 class Storage(ABC):
-    async def save(name, content, *, content_type=None, upload_to=None, context=None) -> str
+    async def save(name, content, *, content_type=None, upload_to=None, context=None) -> FileMeta
     async def open(name, *, chunk_size=65536) -> AsyncIterator[bytes]
     async def delete(name) -> None
     async def exists(name) -> bool
@@ -315,7 +317,7 @@ class Storage(ABC):
 
 | Method      | Description |
 |:------------|:------------|
-| `save()`    | Write content to `name`, overwriting if it already exists. Returns the final stored name. |
+| `save()`    | Write content to `name`, overwriting if it already exists. Returns a `FileMeta` with the stored file's `key`, `name`, `size`, `content_type`, and `backend`. |
 | `open()`    | Stream the content at `name` as an async iterator of bytes chunks. |
 | `delete()`  | Delete the object at `name`. Idempotent — no error if it doesn't exist. |
 | `exists()`  | Return `True` if an object exists at `name`. |
@@ -323,6 +325,27 @@ class Storage(ABC):
 | `url()`     | Return a URL for the stored file. May be relative for local backends. |
 | `full_url()`| Return a fully-qualified (absolute) URL including scheme and host. |
 | `aclose()`  | Release held resources (connection pools, HTTP sessions). Call from your app's shutdown handler. |
+
+### `FileMeta` — the `save()` return object
+
+`save()` returns a frozen `FileMeta` dataclass with everything you need about the stored file:
+
+| Field          | Type             | Description |
+|:---------------|:-----------------|:------------|
+| `name`         | `str`            | The original filename as supplied by the caller |
+| `key`          | `str`            | The resolved storage path/key (pass this to `open()`, `url()`, `delete()`, etc.) |
+| `size`         | `int`            | Total bytes written |
+| `content_type` | `str \| None`    | MIME type, if provided |
+| `backend`      | `str \| None`    | Backend identifier (e.g. `"local"`, `"s3"`, `"azure"`, `"postgresql"`) |
+
+```python
+result = await storage.save("photo.png", data, content_type="image/png", upload_to="avatars")
+result.name          # "photo.png"
+result.key           # "avatars/photo.png"
+result.size          # 102400
+result.content_type  # "image/png"
+result.backend       # "local"
+```
 
 All backends also support the async context manager protocol:
 
@@ -339,20 +362,21 @@ async with LocalStorage(base_path="./uploads") as storage:
 
 ```python
 # String prefix — prepends a directory
-await storage.save("photo.png", content, upload_to="avatars")
-# → stored as "avatars/photo.png"
+result = await storage.save("photo.png", content, upload_to="avatars")
+result.key   # "avatars/photo.png"
+result.name  # "photo.png"
 
 # Callable — full custom logic
 def user_upload_path(name: str, context: dict | None) -> str:
     user_id = context["user_id"]
     return f"users/{user_id}/{name}"
 
-await storage.save(
+result = await storage.save(
     "photo.png", content,
     upload_to=user_upload_path,
     context={"user_id": 42},
 )
-# → stored as "users/42/photo.png"
+result.key  # "users/42/photo.png"
 ```
 
 ---
@@ -413,8 +437,11 @@ class MyStorage(Storage):
 
     async def save(self, name, content, *, content_type=None, upload_to=None, context=None):
         resolved = resolve_upload_name(name, upload_to, context)
-        # ... write content ...
-        return resolved
+        # ... write content, track total_size ...
+        return FileMeta(
+            name=name, key=resolved, size=total_size,
+            content_type=content_type, backend=self.backend_name,
+        )
 
     async def open(self, name, *, chunk_size=65536):
         # ... return an AsyncIterator[bytes] ...
@@ -458,7 +485,7 @@ manager.add("default", backend="mypackage.backends.MyStorage", config={...})
 | `UploadFileReader`    | Wraps a FastAPI `UploadFile` as `AsyncIterator[bytes]` for `save()` |
 | `guess_content_type(filename)` | Best-effort MIME type guess from a filename |
 | `read_all(iterator)`  | Drain an `AsyncIterator[bytes]` into a single `bytes` object |
-| `FileMeta`            | Lightweight dataclass with `name`, `size`, `content_type`, `etag`, `last_modified` |
+| `FileMeta`            | Frozen dataclass returned by `save()` with `name`, `key`, `size`, `content_type`, `backend` |
 | `build_storage(backend, config)` | Construct a `Storage` instance outside of `StorageManager` |
 | `list_registered_backends()` | List all registered backend short names |
 

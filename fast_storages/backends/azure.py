@@ -50,6 +50,7 @@ from ..exceptions import (
     StoragePermissionError,
     StorageUnsupportedOperationError,
 )
+from ..files import FileMeta
 from pydantic_settings import SettingsConfigDict
 
 
@@ -188,7 +189,7 @@ class AzureStorage(Storage):
         content_type: str | None = None,
         upload_to: UploadTo = None,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> FileMeta:
         from azure.core.exceptions import ClientAuthenticationError, HttpResponseError, ServiceRequestError
         from azure.storage.blob import ContentSettings
 
@@ -196,12 +197,28 @@ class AzureStorage(Storage):
         blob_client = self._blob_client(resolved_name)
         content_settings = ContentSettings(content_type=content_type) if content_type else None
 
+        # Track total bytes so we can report size in the returned FileMeta.
+        total_size = 0
+        if isinstance(content, bytes):
+            total_size = len(content)
+            upload_data: SaveContent = content
+        else:
+            # Wrap the async iterable to count bytes as they flow through.
+            size_acc: list[int] = [0]
+
+            async def _counting_iter() -> AsyncIterator[bytes]:
+                async for chunk in content:
+                    size_acc[0] += len(chunk)
+                    yield chunk
+
+            upload_data = _counting_iter()
+
         try:
             # overwrite=True matches this library's overwrite-on-collision
             # contract; upload_blob accepts bytes or AsyncIterable[bytes]
             # directly, so streamed content is passed through unbuffered.
             await blob_client.upload_blob(
-                content,
+                upload_data,
                 overwrite=True,
                 content_settings=content_settings,
             )
@@ -214,7 +231,16 @@ class AzureStorage(Storage):
         except ServiceRequestError as exc:
             raise StorageConnectionError(backend="azure", detail=str(exc)) from exc
 
-        return resolved_name
+        if not isinstance(content, bytes):
+            total_size = size_acc[0]
+
+        return FileMeta(
+            name=name,
+            key=resolved_name,
+            size=total_size,
+            content_type=content_type,
+            backend=self.backend_name,
+        )
 
     async def open(self, name: str, *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> AsyncIterator[bytes]:
         from azure.core.exceptions import ClientAuthenticationError, HttpResponseError, ResourceNotFoundError

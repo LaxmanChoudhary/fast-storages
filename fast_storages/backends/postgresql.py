@@ -80,6 +80,7 @@ from ..exceptions import (
     StoragePermissionError,
     StorageUnsupportedOperationError,
 )
+from ..files import FileMeta
 
 # PostgreSQL Large Object open-mode flags (from libpq headers).
 _INV_READ = 0x40000
@@ -527,7 +528,7 @@ class PostgreSQLStorage(Storage):
         content_type: str | None = None,
         upload_to: UploadTo = None,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> FileMeta:
         resolved = resolve_upload_name(name, upload_to, context)
         if not resolved or resolved.strip() in ("", ".", ".."):
             raise StorageConfigError(f"Invalid storage name: {resolved!r}")
@@ -591,7 +592,13 @@ class PostgreSQLStorage(Storage):
         except Exception as exc:
             raise _wrap_pg_exception(exc, name=resolved) from exc
 
-        return resolved
+        return FileMeta(
+            name=name,
+            key=resolved,
+            size=total_size,
+            content_type=content_type,
+            backend=self.backend_name,
+        )
 
     async def open(
         self, name: str, *, chunk_size: int = DEFAULT_CHUNK_SIZE,
