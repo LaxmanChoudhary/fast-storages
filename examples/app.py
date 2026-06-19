@@ -198,39 +198,12 @@ async def db_download(name: str, storage: Storage = Depends(get_storage("db"))):
     return StreamingResponse(stream, media_type="application/octet-stream")
 
 
-@app.get("/db/file-response/{name:path}")
-async def db_file_response(
-    name: str,
-    background_tasks: BackgroundTasks,
-    storage: Storage = Depends(get_storage("db")),
-):
-    """
-    Serve DB content using FastAPI's FileResponse.
-    Since FileResponse requires a file path on disk, we stream the database
-    content to a temporary file first, return the FileResponse, and register
-    a background task to delete the temporary file after the response is sent.
-    """
-    temp_dir = BASE_DIR / "temp"
-    temp_dir.mkdir(exist_ok=True)
-    
-    # Generate a safe local filename
-    safe_name = name.replace("/", "_").replace("\\", "_")
-    temp_file_path = temp_dir / safe_name
-    
-    # Write the DB content to the temporary file
+@app.get("/db/serve/{name:path}")
+async def db_serve(name: str, storage: Storage = Depends(get_storage("db"))):
+    """Serve a file from PostgreSQL Large Object storage."""
     stream = await storage.open(name)
-    with open(temp_file_path, "wb") as f:
-        async for chunk in stream:
-            f.write(chunk)
-            
-    # Clean up the file after the response has finished sending
-    background_tasks.add_task(lambda path: path.unlink(missing_ok=True), temp_file_path)
-    
-    return FileResponse(
-        path=temp_file_path,
-        filename=name,
-        media_type="application/octet-stream",
-    )
+    media_type = guess_content_type(name)
+    return StreamingResponse(stream, media_type=media_type)
 
 
 @app.delete("/db/files/{name:path}")
