@@ -158,7 +158,7 @@ class PostgreSQLStorageSettings(BaseStorageSettings):
 
     dsn: str
     table_name: str = "storage_files"
-    base_url: str | None = None
+    serve_url: str | None = None
     pool_min_size: int = 2
     pool_max_size: int = 10
     chunk_size: int = DEFAULT_CHUNK_SIZE
@@ -448,7 +448,7 @@ class PostgreSQLStorage(Storage):
         dsn: str,
         *,
         table_name: str = "storage_files",
-        base_url: str | None = None,
+        serve_url: str | None = None,
         pool_min_size: int = 2,
         pool_max_size: int = 10,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
@@ -457,7 +457,26 @@ class PostgreSQLStorage(Storage):
     ) -> None:
         self._dsn = dsn
         self._table_name = _validate_table_name(table_name)
-        self.base_url = base_url.rstrip("/") if base_url else None
+        self.serve_url = serve_url.rstrip("/") if serve_url else None
+
+        if not self.serve_url:
+            import warnings
+            warnings.warn(
+                "PostgreSQL storage backend is configured without 'serve_url'. "
+                "As a result, url() will not work.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            parsed = urlsplit(self.serve_url)
+            if not parsed.scheme or not parsed.netloc:
+                import warnings
+                warnings.warn(
+                    f"PostgreSQL storage backend configured 'serve_url' {self.serve_url!r} without a scheme and host. "
+                    "As a result, url() will not work.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         self._pool_min_size = pool_min_size
         self._pool_max_size = pool_max_size
         self._chunk_size = chunk_size
@@ -704,11 +723,11 @@ class PostgreSQLStorage(Storage):
         return int(result)
 
     async def url(self, name: str, *, expires_in: int | None = None) -> str:
-        if self.base_url is None:
+        if self.serve_url is None:
             raise StorageUnsupportedOperationError(
                 "url",
                 backend="postgresql",
-                reason="base_url was not configured",
+                reason="serve_url was not configured",
             )
         if expires_in is not None:
             raise StorageUnsupportedOperationError(
@@ -716,23 +735,17 @@ class PostgreSQLStorage(Storage):
                 backend="postgresql",
                 reason="PostgreSQL backend has no concept of expiring URLs",
             )
-        cleaned = name.replace("\\", "/").lstrip("/")
-        return f"{self.base_url}/{cleaned}"
-
-    async def full_url(self, name: str, *, expires_in: int | None = None) -> str:
-        relative = await self.url(name, expires_in=expires_in)
-        parsed = urlsplit(self.base_url or "")
+        parsed = urlsplit(self.serve_url)
         if not parsed.scheme or not parsed.netloc:
             raise StorageUnsupportedOperationError(
-                "full_url",
+                "url",
                 backend="postgresql",
                 reason=(
-                    "base_url has no scheme/host to build an absolute URI from "
-                    f"(got {self.base_url!r}); configure base_url as a full origin, "
-                    "e.g. 'https://cdn.example.com/files', to use full_url()."
+                    f"serve_url must be an absolute URL containing scheme and host (got {self.serve_url!r})."
                 ),
             )
-        return relative
+        cleaned = name.replace("\\", "/").lstrip("/")
+        return f"{self.serve_url}/{cleaned}"
 
     async def aclose(self) -> None:
         """Close the connection pool and release resources."""

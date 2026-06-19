@@ -79,6 +79,7 @@ class AzureStorageSettings(BaseStorageSettings):
     default_expires_in: int = 3600
     connection_timeout: int = 5
     read_timeout: int = 10
+    custom_url: str | None = None
 
 
 def _extract_account_key_from_connection_string(connection_string: str) -> str | None:
@@ -157,6 +158,7 @@ class AzureStorage(Storage):
         default_expires_in: int = 3600,
         connection_timeout: int = 5,
         read_timeout: int = 10,
+        custom_url: str | None = None,
     ) -> None:
         try:
             from azure.storage.blob.aio import BlobServiceClient
@@ -182,6 +184,7 @@ class AzureStorage(Storage):
         self.default_expires_in = default_expires_in
         self.connection_timeout = connection_timeout
         self.read_timeout = read_timeout
+        self.custom_url = custom_url.rstrip("/") if custom_url else None
 
         timeout_kwargs = {
             "connection_timeout": connection_timeout,
@@ -390,15 +393,21 @@ class AzureStorage(Storage):
         return f"{blob_client.url}?{sas_token}"
 
     async def url(self, name: str, *, expires_in: int | None = None) -> str:
+        cleaned = name.replace("\\", "/").lstrip("/")
+        if self.custom_url:
+            base = f"{self.custom_url}/{cleaned}"
+            if expires_in is None and self.public:
+                return base
+            sas_url = self._build_sas_url(name, expires_in or self.default_expires_in)
+            if "?" in sas_url:
+                sas_token = sas_url.partition("?")[2]
+                return f"{base}?{sas_token}"
+            return base
+
         if expires_in is None and self.public:
             blob_client = self._blob_client(name)
             return blob_client.url
         return self._build_sas_url(name, expires_in or self.default_expires_in)
-
-    async def full_url(self, name: str, *, expires_in: int | None = None) -> str:
-        # Azure blob URLs (SAS or public) are already absolute, including
-        # scheme and host, so full_url() is identical to url() here.
-        return await self.url(name, expires_in=expires_in)
 
     async def aclose(self) -> None:
         await self._client.close()

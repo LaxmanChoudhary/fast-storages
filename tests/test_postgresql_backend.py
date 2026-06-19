@@ -62,7 +62,7 @@ def test_postgresql_backend_registered():
 def test_postgresql_storage_settings_to_kwargs(monkeypatch):
     monkeypatch.setenv("FASTAPI_STORAGE_POSTGRESQL_DSN", "postgresql://u:p@localhost/testdb")
     monkeypatch.setenv("FASTAPI_STORAGE_POSTGRESQL_TABLE_NAME", "my_files")
-    monkeypatch.setenv("FASTAPI_STORAGE_POSTGRESQL_BASE_URL", "/files")
+    monkeypatch.setenv("FASTAPI_STORAGE_POSTGRESQL_SERVE_URL", "http://localhost:8000/files")
 
     from fast_storages.backends.postgresql import PostgreSQLStorageSettings
 
@@ -71,7 +71,7 @@ def test_postgresql_storage_settings_to_kwargs(monkeypatch):
 
     assert kwargs["dsn"] == "postgresql://u:p@localhost/testdb"
     assert kwargs["table_name"] == "my_files"
-    assert kwargs["base_url"] == "/files"
+    assert kwargs["serve_url"] == "http://localhost:8000/files"
 
 
 def test_postgresql_storage_settings_defaults(monkeypatch):
@@ -85,7 +85,7 @@ def test_postgresql_storage_settings_defaults(monkeypatch):
     assert kwargs["dsn"] == "postgresql://localhost/db"
     assert kwargs["table_name"] == "storage_files"
     # None values are dropped by to_kwargs()
-    assert "base_url" not in kwargs
+    assert "serve_url" not in kwargs
     assert "driver" not in kwargs
 
 
@@ -126,21 +126,51 @@ def test_unknown_driver_raises():
 
 @pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
 @pytest.mark.asyncio
-async def test_url_without_base_url_raises():
+async def test_postgresql_backend_warning_without_serve_url():
     from fast_storages.backends.postgresql import PostgreSQLStorage
 
-    storage = PostgreSQLStorage(dsn="postgresql://localhost/db")
+    with pytest.warns(UserWarning, match="configured without 'serve_url'"):
+        PostgreSQLStorage(dsn="postgresql://localhost/db")
+
+
+@pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
+@pytest.mark.asyncio
+async def test_postgresql_backend_warning_relative_serve_url():
+    from fast_storages.backends.postgresql import PostgreSQLStorage
+
+    with pytest.warns(UserWarning, match="without a scheme and host"):
+        PostgreSQLStorage(dsn="postgresql://localhost/db", serve_url="/files")
+
+
+@pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
+@pytest.mark.asyncio
+async def test_url_without_serve_url_raises():
+    from fast_storages.backends.postgresql import PostgreSQLStorage
+
+    with pytest.warns(UserWarning):
+        storage = PostgreSQLStorage(dsn="postgresql://localhost/db")
     with pytest.raises(fs.StorageUnsupportedOperationError):
         await storage.url("somefile.txt")
 
 
 @pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
 @pytest.mark.asyncio
-async def test_url_with_base_url():
+async def test_url_with_relative_serve_url_raises():
     from fast_storages.backends.postgresql import PostgreSQLStorage
 
-    storage = PostgreSQLStorage(dsn="postgresql://localhost/db", base_url="/files")
-    assert await storage.url("docs/readme.txt") == "/files/docs/readme.txt"
+    with pytest.warns(UserWarning):
+        storage = PostgreSQLStorage(dsn="postgresql://localhost/db", serve_url="/files")
+    with pytest.raises(fs.StorageUnsupportedOperationError):
+        await storage.url("docs/readme.txt")
+
+
+@pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
+@pytest.mark.asyncio
+async def test_url_with_serve_url():
+    from fast_storages.backends.postgresql import PostgreSQLStorage
+
+    storage = PostgreSQLStorage(dsn="postgresql://localhost/db", serve_url="http://localhost:8000/files")
+    assert await storage.url("docs/readme.txt") == "http://localhost:8000/files/docs/readme.txt"
 
 
 @pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
@@ -148,38 +178,17 @@ async def test_url_with_base_url():
 async def test_url_with_expires_in_raises():
     from fast_storages.backends.postgresql import PostgreSQLStorage
 
-    storage = PostgreSQLStorage(dsn="postgresql://localhost/db", base_url="/files")
+    storage = PostgreSQLStorage(dsn="postgresql://localhost/db", serve_url="http://localhost:8000/files")
     with pytest.raises(fs.StorageUnsupportedOperationError):
         await storage.url("a.txt", expires_in=60)
-
-
-@pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
-@pytest.mark.asyncio
-async def test_full_url_without_scheme_raises():
-    from fast_storages.backends.postgresql import PostgreSQLStorage
-
-    storage = PostgreSQLStorage(dsn="postgresql://localhost/db", base_url="/files")
-    with pytest.raises(fs.StorageUnsupportedOperationError):
-        await storage.full_url("a.txt")
-
-
-@pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
-@pytest.mark.asyncio
-async def test_full_url_with_full_origin():
-    from fast_storages.backends.postgresql import PostgreSQLStorage
-
-    storage = PostgreSQLStorage(
-        dsn="postgresql://localhost/db",
-        base_url="https://cdn.example.com/files",
-    )
-    assert await storage.full_url("photo.jpg") == "https://cdn.example.com/files/photo.jpg"
 
 
 @pytest.mark.skipif(not _HAS_DRIVER, reason=_SKIP_NO_DRIVER)
 def test_repr():
     from fast_storages.backends.postgresql import PostgreSQLStorage
 
-    storage = PostgreSQLStorage(dsn="postgresql://localhost/db")
+    with pytest.warns(UserWarning):
+        storage = PostgreSQLStorage(dsn="postgresql://localhost/db")
     assert "postgresql" in repr(storage)
 
 

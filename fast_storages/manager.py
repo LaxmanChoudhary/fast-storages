@@ -29,7 +29,7 @@ class StorageManager:
         manager.add(
             "default",
             backend="local",
-            config={"base_path": "/var/data/uploads", "base_url": "/uploads"},
+            config={"media_root": "/var/data/uploads", "media_url": "/uploads"},
         )
         manager.add(
             "avatars",

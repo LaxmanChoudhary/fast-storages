@@ -113,7 +113,7 @@ def build_storage(
 
     Examples
     --------
-        build_storage("local", {"base_path": "/data", "base_url": "/media"})
+        build_storage("local", {"media_root": "/data", "media_url": "/media"})
 
         settings = S3StorageSettings()  # from env
         build_storage("s3", settings)

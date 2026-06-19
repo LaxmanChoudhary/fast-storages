@@ -241,38 +241,6 @@ class Storage(ABC):
         """
         raise NotImplementedError
 
-    @abstractmethod
-    async def full_url(self, name: str, *, expires_in: int | None = None) -> str:
-        """
-        Return a fully-qualified (absolute) URL for `name`.
-
-        Unlike :meth:`url`, which may return a relative path (e.g.
-        ``/media/photo.png`` for the local backend), ``full_url()`` always
-        returns a URL that includes scheme and host.
-
-        For cloud backends (S3, Azure, GCS) whose URLs are inherently
-        absolute, this typically just delegates to :meth:`url`. For the
-        local backend, ``full_url()`` requires ``base_url`` to include a
-        scheme+host and raises
-        :class:`~fast_storages.exceptions.StorageUnsupportedOperationError`
-        if it doesn't.
-
-        Parameters
-        ----------
-        expires_in:
-            Same semantics as :meth:`url`.
-
-        Raises
-        ------
-        StorageUnsupportedOperationError
-            If this backend cannot produce an absolute URL (e.g. the local
-            backend when ``base_url`` is only a path, not a full origin).
-        StorageFileNotFoundError
-            If ``name`` does not exist (same caveats as :meth:`url`).
-        StoragePermissionError, StorageConnectionError, StorageError
-        """
-        raise NotImplementedError
-
     # ------------------------------------------------------------------
     # Optional lifecycle hooks. Default no-ops; backends with connection
     # pools / SDK clients (S3, Azure) should override these.
