@@ -14,7 +14,7 @@ from fast_storages.backends.local import LocalStorage, LocalStorageSettings
 
 @pytest.fixture
 def storage(tmp_path):
-    return LocalStorage(base_path=tmp_path, base_url="/media")
+    return LocalStorage(media_root=tmp_path, media_url="/media")
 
 
 @pytest.mark.asyncio
@@ -108,8 +108,8 @@ async def test_url_with_base_url(storage):
 
 
 @pytest.mark.asyncio
-async def test_url_without_base_url_raises(tmp_path):
-    storage_no_url = LocalStorage(base_path=tmp_path)
+async def test_url_without_media_url_raises(tmp_path):
+    storage_no_url = LocalStorage(media_root=tmp_path)
     with pytest.raises(fs.StorageUnsupportedOperationError):
         await storage_no_url.url("a.txt")
 
@@ -148,21 +148,21 @@ async def test_invalid_name_rejected(storage):
 
 
 def test_local_storage_settings_to_kwargs(tmp_path, monkeypatch):
-    monkeypatch.setenv("FASTAPI_STORAGE_LOCAL_BASE_PATH", str(tmp_path))
-    monkeypatch.setenv("FASTAPI_STORAGE_LOCAL_BASE_URL", "/media")
+    monkeypatch.setenv("FASTAPI_STORAGE_LOCAL_MEDIA_ROOT", str(tmp_path))
+    monkeypatch.setenv("FASTAPI_STORAGE_LOCAL_MEDIA_URL", "/media")
     settings = LocalStorageSettings()
     kwargs = settings.to_kwargs()
-    assert kwargs == {"base_path": str(tmp_path), "base_url": "/media"}
+    assert kwargs == {"media_root": str(tmp_path), "media_url": "/media"}
 
 
 def test_build_storage_with_dict_config(tmp_path):
-    storage = fs.build_storage("local", {"base_path": str(tmp_path), "base_url": "/m"})
+    storage = fs.build_storage("local", {"media_root": str(tmp_path), "media_url": "/m"})
     assert isinstance(storage, LocalStorage)
-    assert storage.base_url == "/m"
+    assert storage.media_url == "/m"
 
 
 def test_build_storage_with_settings_object(tmp_path, monkeypatch):
-    monkeypatch.setenv("FASTAPI_STORAGE_LOCAL_BASE_PATH", str(tmp_path))
+    monkeypatch.setenv("FASTAPI_STORAGE_LOCAL_MEDIA_ROOT", str(tmp_path))
     settings = LocalStorageSettings()
     storage = fs.build_storage("local", settings)
     assert isinstance(storage, LocalStorage)
@@ -175,7 +175,7 @@ def test_build_storage_unknown_backend_raises():
 
 def test_build_storage_dotted_path(tmp_path):
     storage = fs.build_storage(
-        "fast_storages.backends.local.LocalStorage", {"base_path": str(tmp_path)}
+        "fast_storages.backends.local.LocalStorage", {"media_root": str(tmp_path)}
     )
     assert isinstance(storage, LocalStorage)
 
@@ -187,27 +187,27 @@ def test_s3_backend_registered_but_unusable_without_sdk():
 
 def test_storage_manager_duplicate_name_raises(tmp_path):
     manager = fs.StorageManager()
-    manager.add("default", backend="local", config={"base_path": str(tmp_path / "a")})
+    manager.add("default", backend="local", config={"media_root": str(tmp_path / "a")})
     with pytest.raises(fs.StorageConfigError):
-        manager.add("default", backend="local", config={"base_path": str(tmp_path / "b")})
+        manager.add("default", backend="local", config={"media_root": str(tmp_path / "b")})
 
 
 def test_storage_manager_unknown_name_raises(tmp_path):
     manager = fs.StorageManager()
-    manager.add("default", backend="local", config={"base_path": str(tmp_path)})
+    manager.add("default", backend="local", config={"media_root": str(tmp_path)})
     with pytest.raises(fs.StorageConfigError):
         manager.get("nonexistent")
 
 
 def test_storage_manager_multiple_named_storages(tmp_path):
     manager = fs.StorageManager()
-    manager.add("default", backend="local", config={"base_path": str(tmp_path / "a")})
-    manager.add("avatars", backend="local", config={"base_path": str(tmp_path / "b")})
-    assert manager.get("default").base_path != manager.get("avatars").base_path
+    manager.add("default", backend="local", config={"media_root": str(tmp_path / "a")})
+    manager.add("avatars", backend="local", config={"media_root": str(tmp_path / "b")})
+    assert manager.get("default").media_root != manager.get("avatars").media_root
 
 
 @pytest.mark.asyncio
 async def test_storage_manager_aclose_all(tmp_path):
     manager = fs.StorageManager()
-    manager.add("default", backend="local", config={"base_path": str(tmp_path)})
+    manager.add("default", backend="local", config={"media_root": str(tmp_path)})
     await manager.aclose_all()  # local backend's aclose is a no-op; must not raise

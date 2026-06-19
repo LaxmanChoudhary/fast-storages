@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
     manager.add(
         "default",
         backend="local",
-        config={"base_path": "./uploads", "base_url": "/files"},
+        config={"media_root": "./uploads", "media_url": "/files"},
     )
 
     app.state.storage_manager = manager
@@ -139,7 +139,7 @@ manager.add(
 manager.add(
     "avatars",
     backend="local",
-    config={"base_path": "/data/avatars", "base_url": "/avatars"},
+    config={"media_root": "/data/avatars", "media_url": "/avatars"},
 )
 
 manager.add(
@@ -147,7 +147,7 @@ manager.add(
     backend="postgresql",
     config={
         "dsn": "postgresql://user:pass@localhost:5432/mydb",
-        "base_url": "/db/download",
+        "serve_url": "http://localhost:8000/db/download",
         "create_table": True,
     },
 )
@@ -175,7 +175,7 @@ Every backend accepts config as **plain kwargs**, a **dict**, or a
 
 ```python
 # 1. Plain kwargs via dict
-manager.add("default", backend="local", config={"base_path": "/data", "base_url": "/media"})
+manager.add("default", backend="local", config={"media_root": "/data", "media_url": "/media"})
 
 # 2. Direct construction
 from fast_storages.backends.local import LocalStorage
@@ -201,15 +201,15 @@ manager.add("default", backend="local", config=settings)
 <details>
 <summary><strong>Local Filesystem</strong></summary>
 
-| Parameter   | Type     | Required | Description                          |
-|:------------|:---------|:---------|:-------------------------------------|
-| `base_path` | `str`    | ✅       | Root directory for stored files      |
-| `base_url`  | `str`    | No       | URL prefix for `url()` / `full_url()` |
+| Parameter    | Type     | Required | Description                          |
+|:-------------|:---------|:---------|:-------------------------------------|
+| `media_root` | `str`    | ✅       | Root directory for stored files      |
+| `media_url`  | `str`    | No       | URL prefix for `url()`               |
 
 ```python
 manager.add("default", backend="local", config={
-    "base_path": "./uploads",
-    "base_url": "/files",
+    "media_root": "./uploads",
+    "media_url": "/files",
 })
 ```
 </details>
@@ -225,6 +225,7 @@ manager.add("default", backend="local", config={
 | `account_key`        | `str`  | ✅*      | Account key (used with account_url)      |
 | `public`             | `bool` | No       | If `True`, `url()` returns plain blob URL without SAS token (default: `False`) |
 | `default_expires_in` | `int`  | No       | SAS token lifetime in seconds (default: `3600`) |
+| `custom_url`         | `str`  | No       | Optional custom CDN or domain URL for `url()` |
 
 \* Provide **either** `connection_string` **or** both `account_url` + `account_key`.
 
@@ -232,6 +233,7 @@ manager.add("default", backend="local", config={
 manager.add("default", backend="azure", config={
     "connection_string": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;",
     "container": "uploads",
+    "custom_url": "https://cdn.example.com/uploads",
 })
 ```
 </details>
@@ -243,7 +245,7 @@ manager.add("default", backend="azure", config={
 |:----------------|:-------|:---------|:-----------------------------------------|
 | `dsn`           | `str`  | ✅       | PostgreSQL connection string             |
 | `table_name`    | `str`  | No       | Metadata table name (default: `storage_files`) |
-| `base_url`      | `str`  | No       | URL prefix for `url()` / `full_url()`    |
+| `serve_url`     | `str`  | No       | Complete absolute URL prefix for `url()` (e.g. `http://localhost:8000/db/download`) |
 | `pool_min_size` | `int`  | No       | Minimum pool connections (default: `2`)  |
 | `pool_max_size` | `int`  | No       | Maximum pool connections (default: `10`) |
 | `chunk_size`    | `int`  | No       | Read/write chunk size in bytes (default: `65536`) |
@@ -254,10 +256,32 @@ manager.add("default", backend="azure", config={
 manager.add("db", backend="postgresql", config={
     "dsn": "postgresql://user:pass@localhost:5432/mydb",
     "table_name": "storage_files",
-    "base_url": "/db/download",
+    "serve_url": "http://localhost:8000/db/download",
     "create_table": True,
 })
 ```
+
+### Serving Database Content
+
+Since PostgreSQL Large Object storage files are kept in the database, the URL returned by `url()` is not automatically served. You must serve it yourself by creating a matching endpoint in your application.
+
+Here is a complete FastAPI working example:
+
+```python
+from fastapi import FastAPI, Depends
+from fastapi.responses import StreamingResponse
+from fast_storages import Storage, get_storage
+
+app = FastAPI()
+
+# Matches the path portion of serve_url = "http://localhost:8000/db/download"
+@app.get("/db/download/{name:path}")
+async def db_download(name: str, storage: Storage = Depends(get_storage("db"))):
+    """Stream a file from PostgreSQL Large Object storage."""
+    stream = await storage.open(name)
+    return StreamingResponse(stream, media_type="application/octet-stream")
+```
+</details>
 
 **Schema management with Alembic:**
 
@@ -311,7 +335,6 @@ class Storage(ABC):
     async def exists(name) -> bool
     async def size(name) -> int
     async def url(name, *, expires_in=None) -> str
-    async def full_url(name, *, expires_in=None) -> str
     async def aclose() -> None
 ```
 
@@ -322,8 +345,7 @@ class Storage(ABC):
 | `delete()`  | Delete the object at `name`. Idempotent — no error if it doesn't exist. |
 | `exists()`  | Return `True` if an object exists at `name`. |
 | `size()`    | Return the size of the object in bytes. |
-| `url()`     | Return a URL for the stored file. May be relative for local backends. |
-| `full_url()`| Return a fully-qualified (absolute) URL including scheme and host. |
+| `url()`     | Return a URL for the stored file. May be relative or absolute depending on backend and configuration. |
 | `aclose()`  | Release held resources (connection pools, HTTP sessions). Call from your app's shutdown handler. |
 
 ### `FileMeta` — the `save()` return object
@@ -457,9 +479,6 @@ class MyStorage(Storage):
 
     async def url(self, name, *, expires_in=None):
         # ... return str ...
-
-    async def full_url(self, name, *, expires_in=None):
-        # ... return absolute URL str ...
 ```
 
 2. Register it (optional — enables use by short name):

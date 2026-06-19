@@ -5,9 +5,9 @@ Run with: uvicorn examples.app:app --reload
 
 Three named storages are configured:
 
-  - "default"  → Azure Blob (Azurite dev emulator)
-  - "avatars"  → Local filesystem
-  - "db"       → PostgreSQL Large Objects
+  - "default"  → Local filesystem (media_root/media_url)
+  - "azure"    → Azure Blob (with custom_url)
+  - "db"       → PostgreSQL Large Objects (with serve_url)
 
 To test the PostgreSQL backend, make sure:
   1. psycopg + psycopg-pool are installed:
@@ -22,8 +22,9 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, BackgroundTasks
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from fast_storages import (
     Storage,
@@ -38,7 +39,10 @@ from fast_storages import (
 )
 
 BASE_DIR = Path(__file__).parent
-BASE_URL = "http://localhost:8000/files"
+UPLOAD_DIR = BASE_DIR / "uploads"
+
+# Ensure the upload directory exists before mounting StaticFiles
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # PostgreSQL DSN — override with the PGQL_DSN env var if needed.
 PGQL_DSN = os.environ.get(
@@ -50,13 +54,20 @@ PGQL_DSN = os.environ.get(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     manager = StorageManager()
-    # manager.add(
-    #     "default",
-    #     backend="local",
-    #     config={"base_path": BASE_DIR / "uploads", "base_url": "/files"},
-    # )
+    
+    # 1. Local filesystem storage
     manager.add(
         "default",
+        backend="local",
+        config={
+            "media_root": UPLOAD_DIR,
+            "media_url": "/static/uploads",
+        },
+    )
+    
+    # 2. Azure Blob storage
+    manager.add(
+        "azure",
         backend="azure",
         config={
             "connection_string": (
@@ -66,23 +77,18 @@ async def lifespan(app: FastAPI):
                 "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
             ),
             "container": "uploads",
-
+            "custom_url": "http://localhost:8000/cdn/uploads",
         },
     )
-    # A second named storage, to demonstrate multi-storage support.
-    manager.add(
-        "avatars",
-        backend="local",
-        config={"base_path": "/tmp/storage_test/avatars", "base_url": "/avatars"},
-    )
-    # PostgreSQL Large Object storage.
+    
+    # 3. PostgreSQL Large Object storage
     manager.add(
         "db",
         backend="postgresql",
         config={
             "dsn": PGQL_DSN,
             "table_name": "storage_files",
-            "base_url": "/db/download",
+            "serve_url": "http://localhost:8000/db/download",
             "create_table": True,
         },
     )
@@ -92,6 +98,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Mount FastAPI StaticFiles to handle serving uploaded local files statically
+app.mount("/static/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
 # ---------------------------------------------------------------------------
@@ -119,44 +128,52 @@ async def _generic_storage_error_handler(request, exc: StorageError):
 
 
 # ---------------------------------------------------------------------------
-# Azure (default) routes
+# Local Storage Routes (default)
 # ---------------------------------------------------------------------------
 
 @app.post("/upload")
-async def upload(file: UploadFile, storage: Storage = Depends(get_storage())):
+async def upload(file: UploadFile, storage: Storage = Depends(get_storage("default"))):
+    """Upload a file to the local filesystem storage."""
     content_type = file.content_type or guess_content_type(file.filename or "")
     reader = UploadFileReader(file)
     file_name = file.filename or "unnamed"
-    full_path = "myspace/2026/"+file_name
-    key = await storage.save(full_path, reader, content_type=content_type)
+    file_meta = await storage.save(file_name, reader, upload_to="test-upload", content_type=content_type)
     return {
-        "name": file_name,
-        "size": await storage.size(key),
-        "url": await storage.url(key),
+        "name": file_meta.name,
+        "size": file_meta.size,
+        "key": file_meta.key,
+        "url": await storage.url(file_meta.key),
     }
 
 
-@app.post("/upload/avatar")
-async def upload_avatar(file: UploadFile, storage: Storage = Depends(get_storage("avatars"))):
-    reader = UploadFileReader(file)
-    saved_name = await storage.save(file.filename or "unnamed", reader, content_type=file.content_type)
-    return {"name": saved_name, "url": await storage.url(saved_name)}
-
-
-@app.get("/download/{name}")
-async def download(name: str, storage: Storage = Depends(get_storage())):
-    stream = await storage.open(name)
-    return StreamingResponse(stream, media_type="application/octet-stream")
-
-
-@app.delete("/files/{name}")
-async def delete_file(name: str, storage: Storage = Depends(get_storage())):
+@app.delete("/files/{name:path}")
+async def delete_file(name: str, storage: Storage = Depends(get_storage("default"))):
+    """Delete a file from local filesystem storage."""
     await storage.delete(name)
     return {"deleted": name}
 
 
 # ---------------------------------------------------------------------------
-# PostgreSQL DB routes
+# Azure Blob Storage Routes
+# ---------------------------------------------------------------------------
+
+@app.post("/azure/upload")
+async def azure_upload(file: UploadFile, storage: Storage = Depends(get_storage("azure"))):
+    """Upload a file to Azure Blob storage."""
+    content_type = file.content_type or guess_content_type(file.filename or "")
+    reader = UploadFileReader(file)
+    file_name = file.filename or "unnamed"
+    file_meta = await storage.save(file_name, reader, content_type=content_type)
+    return {
+        "name": file_meta.name,
+        "size": file_meta.size,
+        "key": file_meta.key,
+        "url": await storage.url(file_meta.key),
+    }
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL DB Routes
 # ---------------------------------------------------------------------------
 
 @app.post("/db/upload")
@@ -165,29 +182,12 @@ async def db_upload(file: UploadFile, storage: Storage = Depends(get_storage("db
     content_type = file.content_type or guess_content_type(file.filename or "")
     reader = UploadFileReader(file)
     file_name = file.filename or "unnamed"
-    key = await storage.save(file_name, reader, content_type=content_type)
+    file_meta = await storage.save(file_name, reader, content_type=content_type)
     return {
-        "name": key,
-        "size": await storage.size(key),
-        "url": await storage.url(key),
-    }
-
-
-@app.post("/db/upload/{folder:path}")
-async def db_upload_to_folder(
-    folder: str,
-    file: UploadFile,
-    storage: Storage = Depends(get_storage("db")),
-):
-    """Upload a file into a specific folder path inside DB storage."""
-    content_type = file.content_type or guess_content_type(file.filename or "")
-    reader = UploadFileReader(file)
-    file_name = file.filename or "unnamed"
-    key = await storage.save(file_name, reader, content_type=content_type, upload_to=folder)
-    return {
-        "name": key,
-        "size": await storage.size(key),
-        "url": await storage.url(key),
+        "name": file_meta.name,
+        "size": file_meta.size,
+        "key": file_meta.key,
+        "url": await storage.url(file_meta.key),
     }
 
 
@@ -198,11 +198,12 @@ async def db_download(name: str, storage: Storage = Depends(get_storage("db"))):
     return StreamingResponse(stream, media_type="application/octet-stream")
 
 
-@app.get("/db/exists/{name:path}")
-async def db_exists(name: str, storage: Storage = Depends(get_storage("db"))):
-    """Check if a file exists in DB storage."""
-    found = await storage.exists(name)
-    return {"name": name, "exists": found}
+@app.get("/db/serve/{name:path}")
+async def db_serve(name: str, storage: Storage = Depends(get_storage("db"))):
+    """Serve a file from PostgreSQL Large Object storage."""
+    stream = await storage.open(name)
+    media_type = guess_content_type(name)
+    return StreamingResponse(stream, media_type=media_type)
 
 
 @app.delete("/db/files/{name:path}")

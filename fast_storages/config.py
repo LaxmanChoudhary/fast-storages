@@ -10,9 +10,9 @@ also accepts directly.
 
 This means all three of these are equivalent:
 
-    LocalStorage(base_path="/var/data/media", base_url="/media")
+    LocalStorage(media_root="/var/data/media", media_url="/media")
 
-    LocalStorage(**{"base_path": "/var/data/media", "base_url": "/media"})
+    LocalStorage(**{"media_root": "/var/data/media", "media_url": "/media"})
 
     settings = LocalStorageSettings()  # reads FASTAPI_STORAGE_LOCAL_BASE_PATH etc from env
     LocalStorage(**settings.to_kwargs())

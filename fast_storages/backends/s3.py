@@ -152,12 +152,6 @@ class S3Storage(Storage):
             "and expires_in is None. See module docstring."
         )
 
-    async def full_url(self, name: str, *, expires_in: int | None = None) -> str:
-        raise NotImplementedError(
-            "S3Storage.full_url: S3 URLs (presigned or public bucket URLs) are already "
-            "absolute, so this should just delegate to url(name, expires_in=expires_in)."
-        )
-
     async def aclose(self) -> None:
         # Once implemented: close the held aioboto3 client/session here.
         return None
