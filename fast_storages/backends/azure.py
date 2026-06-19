@@ -37,6 +37,7 @@ Other implementation notes
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, AsyncIterator, ClassVar
 from urllib.parse import urlsplit
@@ -76,6 +77,8 @@ class AzureStorageSettings(BaseStorageSettings):
     account_key: str | None = None
     public: bool = False
     default_expires_in: int = 3600
+    connection_timeout: int = 5
+    read_timeout: int = 10
 
 
 def _extract_account_key_from_connection_string(connection_string: str) -> str | None:
@@ -131,6 +134,14 @@ class AzureStorage(Storage):
     default_expires_in:
         Default SAS token lifetime in seconds, used when url()/full_url()
         is called without an explicit expires_in and public=False.
+    connection_timeout:
+        Seconds to wait when establishing a connection to Azure
+        (default: ``5``).  Prevents requests from hanging indefinitely
+        on DNS/network issues.
+    read_timeout:
+        Seconds to wait between consecutive read operations from Azure
+        (default: ``60``).  This is a socket-level timeout, not an
+        overall transfer timeout.
     """
 
     backend_name = "azure"
@@ -144,6 +155,8 @@ class AzureStorage(Storage):
         account_key: str | None = None,
         public: bool = False,
         default_expires_in: int = 3600,
+        connection_timeout: int = 5,
+        read_timeout: int = 10,
     ) -> None:
         try:
             from azure.storage.blob.aio import BlobServiceClient
@@ -167,13 +180,25 @@ class AzureStorage(Storage):
         self.container = container
         self.public = public
         self.default_expires_in = default_expires_in
+        self.connection_timeout = connection_timeout
+        self.read_timeout = read_timeout
+
+        timeout_kwargs = {
+            "connection_timeout": connection_timeout,
+            "read_timeout": read_timeout,
+        }
 
         if connection_string:
-            self._client = BlobServiceClient.from_connection_string(connection_string)
+            self._client = BlobServiceClient.from_connection_string(
+                connection_string, **timeout_kwargs,
+            )
             self._account_key = _extract_account_key_from_connection_string(connection_string)
             self._account_name = _extract_account_name(connection_string, None)
         else:
-            self._client = BlobServiceClient(account_url=account_url, credential=account_key)
+            self._client = BlobServiceClient(
+                account_url=account_url, credential=account_key,
+                **timeout_kwargs,
+            )
             self._account_key = account_key
             self._account_name = _extract_account_name(None, account_url)
 
@@ -230,6 +255,11 @@ class AzureStorage(Storage):
             raise
         except ServiceRequestError as exc:
             raise StorageConnectionError(backend="azure", detail=str(exc)) from exc
+        except asyncio.TimeoutError as exc:
+            raise StorageConnectionError(
+                backend="azure",
+                detail=f"Operation timed out saving {resolved_name!r}",
+            ) from exc
 
         if not isinstance(content, bytes):
             total_size = size_acc[0]
@@ -256,6 +286,11 @@ class AzureStorage(Storage):
             if exc.status_code == 403:
                 raise StoragePermissionError(name, backend="azure", detail=str(exc)) from exc
             raise
+        except asyncio.TimeoutError as exc:
+            raise StorageConnectionError(
+                backend="azure",
+                detail=f"Operation timed out opening {name!r}",
+            ) from exc
 
         # NOTE: chunk_size is accepted for Storage interface compatibility
         # but Azure's chunks() determines its own chunk boundaries; there is
@@ -282,6 +317,11 @@ class AzureStorage(Storage):
             if exc.status_code == 403:
                 raise StoragePermissionError(name, backend="azure", detail=str(exc)) from exc
             raise
+        except asyncio.TimeoutError as exc:
+            raise StorageConnectionError(
+                backend="azure",
+                detail=f"Operation timed out deleting {name!r}",
+            ) from exc
 
     async def exists(self, name: str) -> bool:
         from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
@@ -295,6 +335,11 @@ class AzureStorage(Storage):
             if exc.status_code == 403:
                 raise StoragePermissionError(name, backend="azure", detail=str(exc)) from exc
             raise
+        except asyncio.TimeoutError as exc:
+            raise StorageConnectionError(
+                backend="azure",
+                detail=f"Operation timed out checking existence of {name!r}",
+            ) from exc
 
     async def size(self, name: str) -> int:
         from azure.core.exceptions import ClientAuthenticationError, HttpResponseError, ResourceNotFoundError
@@ -310,6 +355,11 @@ class AzureStorage(Storage):
             if exc.status_code == 403:
                 raise StoragePermissionError(name, backend="azure", detail=str(exc)) from exc
             raise
+        except asyncio.TimeoutError as exc:
+            raise StorageConnectionError(
+                backend="azure",
+                detail=f"Operation timed out fetching size of {name!r}",
+            ) from exc
         return props.size
 
     def _build_sas_url(self, name: str, expires_in: int) -> str:
