@@ -27,7 +27,10 @@ Design notes
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterable, AsyncIterator, Callable, Union
+from typing import TYPE_CHECKING, Any, AsyncIterable, AsyncIterator, Callable, Union
+
+if TYPE_CHECKING:
+    from .files import FileMeta
 
 # What save() accepts. bytes for small/in-memory content, AsyncIterable[bytes]
 # for streamed/large content (file uploads, generators reading from disk, etc).
@@ -112,7 +115,7 @@ class Storage(ABC):
         content_type: str | None = None,
         upload_to: UploadTo = None,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> "FileMeta":
         """
         Write `content` to `name`, overwriting any existing object at that path.
 
@@ -140,10 +143,10 @@ class Storage(ABC):
 
         Returns
         -------
-        str
-            The name the content was actually saved under. When *upload_to*
-            is provided, this will be the resolved name rather than the
-            original *name*.
+        FileMeta
+            A :class:`~fast_storages.files.FileMeta` instance describing the
+            saved file, including the resolved storage key, size in bytes,
+            content type, and backend identifier.
 
         Raises
         ------

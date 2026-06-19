@@ -32,6 +32,7 @@ from ..exceptions import (
     StoragePermissionError,
     StorageUnsupportedOperationError,
 )
+from ..files import FileMeta
 from pydantic_settings import SettingsConfigDict
 
 
@@ -113,7 +114,7 @@ class LocalStorage(Storage):
         content_type: str | None = None,
         upload_to: UploadTo = None,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> FileMeta:
         # content_type is accepted for interface compatibility but local
         # filesystem has no native metadata slot to put it in; silently
         # ignored, matching Django's FileSystemStorage behavior.
@@ -121,17 +122,26 @@ class LocalStorage(Storage):
         path = _resolve_safe_path(self.base_path, resolved_name)
         path.parent.mkdir(parents=True, exist_ok=True)
 
+        total_size = 0
         try:
             async with aiofiles.open(path, "wb") as f:
                 if isinstance(content, bytes):
                     await f.write(content)
+                    total_size = len(content)
                 else:
                     async for chunk in content:
                         await f.write(chunk)
+                        total_size += len(chunk)
         except PermissionError as exc:
             raise StoragePermissionError(resolved_name, backend="local", detail=str(exc)) from exc
 
-        return resolved_name
+        return FileMeta(
+            name=name,
+            key=resolved_name,
+            size=total_size,
+            content_type=content_type,
+            backend=self.backend_name,
+        )
 
     async def open(self, name: str, *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> AsyncIterator[bytes]:
         path = _resolve_safe_path(self.base_path, name)
